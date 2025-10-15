@@ -40,11 +40,6 @@
   - [3.1 Definiciones (DDL)](#31-definiciones-ddl)
   - [3.2 Carga inicial (DML)](#32-carga-inicial-dml)
 - [4. Consultas de negocio orientadas a IA](#4-consultas-de-negocio-orientadas-a-ia)
-  - [4.1 Conversión temprana (7 días)](#41-conversión-temprana-7-días)
-  - [4.2 Recencia promedio](#42-recencia-promedio)
-  - [4.3 AOV por categoría](#43-aov-por-categoría)
-  - [4.4 Tasa de devoluciones--reclamos](#44-tasa-de-devoluciones--reclamos)
-  - [4.5 Riesgo de churn](#45-riesgo-de-churn)
 - [5. Propuesta de features para IA](#5-propuesta-de-features-para-ia)
 - [6. Conclusiones](#6-conclusiones)
 - [Anexos](#anexos)
@@ -139,11 +134,21 @@ Implementación en **PostgreSQL 13+**, con **UUID**, **ENUMs**, claves foráneas
 
 # 4. CONSULTAS DE NEGOCIO ORIENTADAS A IA
 
-* **Conversión temprana (7 días)**: probabilidad de primer trade ≤7 días.
-* **Recencia promedio**: días entre compras por cohorte.
-* **AOV por categoría**: ticket medio por producto/cartera.
-* **Devoluciones–reclamos**: ratio de fricción operacional.
-* **Churn**: inactividad >90 días (retención y *win-back*).  
+* **Conversión temprana (7 días)**
+  Mide la activación inicial: porcentaje de usuarios cuyo **primer trade** ocurre dentro de los 7 días posteriores al registro; insumo directo para optimizar onboarding y nudges.
+
+* **Intervalo promedio entre compras por grupo (mes de registro)**
+  Compara la **frecuencia de compra** entre grupos de usuarios creados por **mes de registro**, calculando el **promedio de días entre compras** por grupo para ajustar cadencia de re-engagement.
+
+* **AOV por categoría**
+  Calcula el **ticket promedio** por categoría de producto/cartera (normalizado a moneda base) para priorizar categorías rentables y orientar campañas y cross-sell.
+
+* **Devoluciones–reclamos**
+  Estima la **fricción operacional** como razón de (devoluciones + *chargebacks*) sobre transacciones, para detectar problemas por **método de pago/PSP/país** y gatillar acciones antifraude/soporte.
+
+* **Churn (90 días)**
+  Identifica **inactividad** marcando usuarios sin actividad relevante por >90 días, habilitando **win-back** segmentado según riesgo/valor (LTV) y canal de adquisición.
+
 
 [↑ Volver al índice](#índice)
 
@@ -151,15 +156,13 @@ Implementación en **PostgreSQL 13+**, con **UUID**, **ENUMs**, claves foráneas
 
 # 5. PROPUESTA DE FEATURES PARA IA
 
-## 5. Propuesta de features para IA
-
-| Feature              | Descripción ampliada                                                                                                 | Métrica / Cálculo                                                                                       | Tipo      | Fuente                      | Ventana  | Script SQL                                                                                   | Uso en IA (nota)                                        |
-|----------------------|-----------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|-----------|-----------------------------|----------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------|
-| Conversión temprana  | Señal de **activación**: ¿el usuario logra su **primer trade** pronto tras registrarse? Anticipa adopción sostenida. | `CASE WHEN MIN(placed_at) - signup_ts <= 7 días THEN 1 ELSE 0 END`                                       | Binaria   | `users`, `orders`           | 7 días   | [conversion_temprana.sql](./queries_of_the_bussiness/30_day_engagement_feature.sql)                             | Modelos de onboarding / propensity to start             |
-| Recencia             | **Frecuencia operativa**: mide la **cadencia** entre operaciones; menor recencia = mayor hábito.                      | `AVG(DIFF_DAYS(order_i, order_{i-1}))` por usuario                                                       | Numérica  | `orders`                    | 90 días  | [recencia_90d.sql](./queries_of_the_bussiness/90_days_trading_behaviour.sql)                                           | Retención, segmentación RFM                             |
-| Engagement social    | **Participación en comunidad**: actividad creada y recibida que correlaciona con retorno a la app.                    | `COUNT(posts) + COUNT(comments) + COUNT(likes)` en 30d                                                   | Numérica  | `social_posts/comments/likes` | 30 días  | [engagement_social_30d.sql](./queries_of_the_bussiness/concentration_risk.sql)                         | Propensión a volver / campañas in-app                   |
-| Riesgo de churn      | **Deserción**: etiqueta si el usuario está **inactivo** por un periodo relevante para el negocio.                    | `CASE WHEN MAX(placed_at) <= now() - INTERVAL '90 days' THEN 1 ELSE 0 END`                               | Binaria   | `orders`                    | 90 días  | [riesgo_churn_90d.sql](./queries_of_the_bussiness/social_and_copy_trading.sql)                                   | Churn modeling, triggers de win-back                    |
-| Depósito→Trade       | **Calidad del funnel**: de quienes **depositan**, ¿cuántos **operan** en el plazo objetivo?                          | `users_con_deposito_y_trade / users_con_deposito` (en 14d desde el primer depósito)                      | Numérica  | `deposits`, `orders`        | 14 días  | [deposito_a_trade_14d.sql](./queries_of_the_bussiness/top_100_loyal_users_query.sql)                           | Eficiencia de adquisición / ROAS                        |
+| Nombre                                      | Descripción                                                                                                       | Script SQL                                                                                   | Uso en IA                                      |
+|---------------------------------------------|-------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------------|
+| Engagement de 30 días: sesiones, días activos, eventos y apertura de notificaciones                | Construye señales de comportamiento recientes para modelos de **retención y churn**. Calcula, por usuario, la actividad en los últimos **30 días**: número de **sesiones**, **días activos**, **eventos** de app, **pushes enviados/abiertos** y la **tasa de apertura**. El resultado sirve como *feature store* continuo y puede segmentarse en **bajo/medio/alto** engagement para operación. | [30_day_engagement_feature.sql](./queries_of_the_bussiness/30_day_engagement_feature.sql)          | Onboarding, propensity to start                |
+| Comportamiento y desempeño de trading a 90 días | Caracteriza el **estilo** y la **habilidad** del usuario en los últimos 90 días para recomendaciones de **copy-trading** y segmentación: volumen y conteo de trades, **win rate**, **P&L realizado en USD**, **tamaño promedio** y **diversificación** por instrumentos y monedas. | [90_days_trading_behaviour.sql](./queries_of_the_bussiness/90_days_trading_behaviour.sql)                 | Retención, segmentación RFM                    |
+| Riesgo de concentración en posiciones abiertas (HHI)                 | Mide qué tan **concentrado** está el portafolio abierto de cada usuario usando el **Índice de Herfindahl–Hirschman (HHI)**: suma de los **pesos al cuadrado** de cada instrumento sobre el valor total en USD. - **Cerca de 1** → apuesta concentrada (uno o pocos instrumentos). - **Cerca de 0** → portafolio diversificado. Incluye `margin_enabled` para capturar apetito de apalancamiento. | [concentration_risk.sql](./queries_of_the_bussiness/concentration_risk.sql)               | Propensión a volver, campañas in-app           |
+| Influencia social y de copy-trading                   | Construye señales para identificar **quién conviene copiar** y **quién influye** en la comunidad. Resume actividad creada y recibida (calidad de contenido/engagement) y prueba social operativa (seguidores y copiadores activos) para **rankear líderes** y alimentar recomendaciones de **CopyTrader**.                           | [social_and_copy_trading.sql](./queries_of_the_bussiness/social_and_copy_trading.sql)               | Churn modeling, triggers de win-back           |
+| Top 100 usuarios leales (score combinado de engagement + retención)                  | Este análisis identifica a los 100 usuarios más leales de la plataforma, combinando su nivel de actividad reciente, intensidad de uso diario, respuesta a notificaciones y retención a 90 días, para revelar quiénes sostienen el mayor compromiso real con el ecosistema.                   | [top_100_loyal_users_query.sql](./queries_of_the_bussiness/top_100_loyal_users_query.sql)         | Eficiencia de adquisición, ROAS                |
 
 
 [↑ Volver al índice](#índice)
